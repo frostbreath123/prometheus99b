@@ -266,12 +266,3 @@ Both write SHA-256 checksums.
 | **Not certified** | ISA-101, ISA-18.2, IEC 62443 and ISO 13850 are followed, not certified. This is not a safety system |
 
 Full list: [Known limitations](docs/KNOWN-LIMITATIONS.md).
-
-## License
-
-Prometheus HMI is released under the [MIT License](LICENSE). Copyright (c) 2026 Nikhil Nuguri.
-The software is provided "as is", without warranty of any kind.
-
----
-
-<sub>Prometheus HMI · Nikhil Nuguri · MIT License</sub>
