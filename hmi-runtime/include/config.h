@@ -1,0 +1,244 @@
+/**
+ * @file config.h
+ * @brief Industrial HMI Runtime System Configuration
+ * @standards Designed after IEC 62443-4-2, ISA-101 and ISA-18.2. Not certified, and not a safety
+ *            system: no IEC 61508 / IEC 62061 / ISO 13849 claim is made. Safety functions (emergency
+ *            stop, interlocks that protect people) belong in hardwired circuits and safety PLCs.
+ *
+ * All runtime state is statically allocated (no malloc/calloc/free in
+ * application code). The display is rendered through one 19,200-byte
+ * band buffer (4-bit CLUT) that is streamed to the window band by band.
+ */
+
+#ifndef INDUSTRIAL_HMI_CONFIG_H
+#define INDUSTRIAL_HMI_CONFIG_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+/* Build profile for small targets (ESP32 class): smaller capacities and rates.
+ * Every value below that is wrapped in #ifndef can also be set with -D on the command line. */
+#if defined(HMI_PROFILE_MCU)
+#include "profile_mcu.h"
+#endif
+
+/* --- Display & Band Buffer --- */
+#define HMI_DISPLAY_WIDTH_DEFAULT   800
+#define HMI_DISPLAY_HEIGHT_DEFAULT  480
+#define HMI_DISPLAY_BPP             4      /* 4-bit indexed, 16-colour CLUT */
+
+/* Static band buffer: 19,200 bytes (18.75 KB) */
+#define HMI_DISPLAY_MAX_BUF_SIZE    19200
+
+/* Widest frame the renderer will rasterise. Wider windows are drawn at this
+ * width (the remainder of the client area stays background). 7680 px gives
+ * row_bytes = 3840 and band_h = 5, so one band always fits the buffer. */
+#define HMI_DISPLAY_MAX_WIDTH       7680
+#define HMI_DISPLAY_MAX_HEIGHT      4320
+
+/* Normalised permille coordinate system (0..1000 of the content area) */
+#define HMI_PERMILLE_MAX            1000
+#define HMI_NORM_TO_PIXEL(norm, total_px) (((norm) * (total_px)) / HMI_PERMILLE_MAX)
+
+/* --- Timing --- */
+#ifndef HMI_FIELDBUS_FREQ_HZ
+#define HMI_FIELDBUS_FREQ_HZ        1000   /* 1 kHz fieldbus / supervision loop */
+#endif
+#define HMI_FIELDBUS_PERIOD_US      (1000000u / HMI_FIELDBUS_FREQ_HZ)
+#ifndef HMI_UI_FREQ_HZ
+#define HMI_UI_FREQ_HZ              30     /* ~33 ms UI frame period */
+#endif
+#define HMI_UI_FRAME_PERIOD_MS      (1000 / HMI_UI_FREQ_HZ)
+
+/* --- Watchdog --- */
+#define HMI_WATCHDOG_MAX_AGE_MS     500    /* heartbeat silence that trips the watchdog */
+#define HMI_WATCHDOG_TICK_MS        50     /* evaluation period */
+#define HMI_FAULT_INJECT_STALL_MS   750    /* test: fieldbus thread deliberately stalls this long */
+
+/* --- Snapshot hand-off to the UI --- */
+#define HMI_PUBLISH_PERIOD_MS       10     /* fieldbus -> UI snapshot copy period (the screen draws every ~33 ms) */
+#define HMI_SNAPSHOT_STALE_MS       500    /* the UI marks data stale when the last publish is older */
+#define HMI_LATENCY_TARGET_MS       100    /* data-to-screen latency target shown on Diagnostics */
+
+/* --- Modbus TCP --- */
+#define HMI_MODBUS_DEFAULT_PORT     502
+#define HMI_MODBUS_POLL_MS          100    /* one read cycle every 100 ms */
+#define HMI_MODBUS_TIMEOUT_MS       500    /* response timeout per request */
+#define HMI_MODBUS_CONNECT_TIMEOUT_MS 2000
+#define HMI_MODBUS_BACKOFF_MIN_MS   1000
+#define HMI_MODBUS_BACKOFF_MAX_MS   8000
+#define HMI_MODBUS_WRITE_QUEUE      8      /* pending operator writes */
+#define HMI_MODBUS_EXC_OFFLINE      3      /* consecutive read exceptions before a device is declared OFFLINE */
+
+/* --- Files --- */
+#define HMI_PATH_MAX                260    /* longest file path the runtime handles */
+
+/* --- Persistent alarm log --- */
+#define HMI_ALARM_LOG_PATH          "alarms.log"
+#ifndef HMI_ALARM_LOG_MAX_BYTES
+#define HMI_ALARM_LOG_MAX_BYTES     (1024u * 1024u)  /* rotate to alarms.log.1 beyond this */
+#endif
+
+/* --- Capacities (statically bounded) --- */
+/* Tag id map: 0..31 runtime (8..11 host telemetry, 13 HMI watchdog, 14 devices not shown),
+ * then HMI_MAX_DEVICES blocks of HMI_DEVICE_TAG_SPAN tags, one per connected device.
+ * Tag ids are 16-bit. HMI_MAX_DEVICES is the build's capacity (memory is reserved for it at
+ * start); --max-devices lowers the limit at run time. */
+typedef uint16_t hmi_tag_id_t;
+#ifndef HMI_MAX_DEVICES
+#define HMI_MAX_DEVICES             128    /* PLCs, drives and meters attached at once */
+#endif
+#define HMI_DEVICE_TAG_BASE         32
+#define HMI_DEVICE_TAG_SPAN         24
+#define HMI_MAX_TAGS                (HMI_DEVICE_TAG_BASE + HMI_MAX_DEVICES * HMI_DEVICE_TAG_SPAN)  /* 128 devices: 3104 tags */
+#define HMI_DEV_TAG(slot, rel)      ((hmi_tag_id_t)(HMI_DEVICE_TAG_BASE + (slot) * HMI_DEVICE_TAG_SPAN + (rel)))
+#if HMI_MAX_DEVICES < 1 || HMI_MAX_DEVICES > 250 || HMI_MAX_TAGS > 65535
+#error "HMI_MAX_DEVICES must be 1..250 (slot numbers are 8-bit; 0xFF means no slot)"
+#endif
+
+/* --- Plug and play --- */
+#define HMI_DISCOVERY_PERIOD_MS     3000   /* how often the discovery thread looks for new PLCs */
+#define HMI_DISCOVERY_CONNECT_MS    300    /* probe connect timeout */
+#define HMI_DISCOVERY_REPLY_MS      600    /* probe identification reply timeout */
+#ifndef HMI_DISCOVERY_BATCH
+#define HMI_DISCOVERY_BATCH         32     /* parallel probes (sockets) per batch, at most 32 */
+#endif
+#define HMI_DEVICE_REMOVE_MS        10000  /* offline this long -> removed from the dashboard (0 = never) */
+#define HMI_DEVICE_SLOT_COOLDOWN_MS 1500   /* a freed slot is not reused before this */
+#define HMI_MAX_WIDGETS_PER_SCREEN  24
+#define HMI_TREND_SAMPLES           60     /* 60 s at 1 Hz */
+#ifndef HMI_HEARTBEAT_MS
+#define HMI_HEARTBEAT_MS            1000u  /* HMI -> PLC heartbeat write period (devices that have one) */
+#endif
+#ifndef HMI_ALARM_LOG_SYNC_MS
+/* Audit records reach the OS at once (they survive a crash of the runtime) and the medium at
+ * least this often (they survive a power cut). A forced write to an SD card or flash can take
+ * tens of milliseconds on the UI thread, so it is bounded to a few per second; stop and critical
+ * events are forced to the medium immediately. */
+#define HMI_ALARM_LOG_SYNC_MS       250u
+#endif
+#ifndef HMI_ALARM_JOURNAL_SIZE
+/* In-memory circular journal between the fieldbus thread and the log writer (the UI thread, once
+ * a frame). During an alarm flood (ISA-18.2: more than 10 alarms in 10 min per operator, often
+ * hundreds in seconds, e.g. a power dip across many devices) the writer must not fall behind and
+ * replace audit records by "RECORDS LOST": 512 x 72 B = 36 KB. */
+#define HMI_ALARM_JOURNAL_SIZE      512
+#endif
+#if HMI_ALARM_JOURNAL_SIZE < 8 || HMI_ALARM_JOURNAL_SIZE > 65535
+#error "HMI_ALARM_JOURNAL_SIZE must fit the uint16_t journal indices"
+#endif
+/* ISA-18.2 alarm handling */
+#define HMI_ALARM_EVAL_MS           10     /* alarm evaluation period (devices answer every 100 ms) */
+#define HMI_ALARM_SHELVE_MS         (60u * 60u * 1000u)   /* a shelved alarm comes back after 1 hour */
+#define HMI_ALARM_FLOOD_ON          10     /* more than this many new alarms in 10 min: flood */
+#define HMI_ALARM_FLOOD_OFF         5      /* fewer than this in 10 min: flood over */
+#define HMI_ALARM_CHATTER_COUNT     3      /* this many annunciations of one point ... */
+#define HMI_ALARM_CHATTER_MS        60000u /* ... within this window: chattering */
+#define HMI_INPUT_QUEUE_SIZE        16
+
+/* --- Driver modules compiled in (the generic Modbus driver is always present) ---
+ * A build only carries the modules it lists; leave a module's source file out of the
+ * build and set its switch to 0 to drop it. */
+#ifndef HMI_DRIVER_TANK_SKID
+#define HMI_DRIVER_TANK_SKID        1      /* Modicon M340 / M580 tank-skid application */
+#endif
+#ifndef HMI_DRIVER_ALTIVAR
+#define HMI_DRIVER_ALTIVAR          1      /* Altivar ATV320 / ATV340 / ATV630 drive (real parameter map) */
+#endif
+#ifndef HMI_DRIVER_CONVEYOR
+#define HMI_DRIVER_CONVEYOR         1      /* Modicon M241 conveyor line */
+#endif
+#ifndef HMI_DRIVER_BOILER
+#define HMI_DRIVER_BOILER           1      /* Modicon M580 boiler */
+#endif
+#ifndef HMI_DRIVER_PUMP_STATION
+#define HMI_DRIVER_PUMP_STATION     1      /* Siemens S7-1200 duty / standby pump station */
+#endif
+#ifndef HMI_DRIVER_COMPRESSOR
+#define HMI_DRIVER_COMPRESSOR       1      /* Allen-Bradley Micro850 air compressor */
+#endif
+#ifndef HMI_DRIVER_AHU
+#define HMI_DRIVER_AHU              1      /* Modicon M251 air handling unit */
+#endif
+#ifndef HMI_DRIVER_ABB_DRIVE
+#define HMI_DRIVER_ABB_DRIVE        1      /* ABB ACS580 drive */
+#endif
+#ifndef HMI_DRIVER_EM6400
+#define HMI_DRIVER_EM6400           1      /* PowerLogic EM6400NG / PM2xxx energy meter (via a PAS600 gateway) */
+#endif
+
+/* --- Ergonomics --- */
+#define HMI_MIN_TOUCH_TARGET_PX     48     /* ISO 9241-9 minimum touch target */
+
+/* --- 4-bit CLUT palette indices --- */
+#define COLOR_OBSIDIAN_BG      0   /* #0B0F17 */
+#define COLOR_TITANIUM_CARD    1   /* #161F2E */
+#define COLOR_CARD_BORDER      2   /* #26334D */
+#define COLOR_CHALK_WHITE      3   /* #F8FAFC */
+#define COLOR_SILVER_MUTED     4   /* #94A3B8 */
+#define COLOR_DARK_GRAY        5   /* #334155 */
+#define COLOR_CYAN_ACCENT      6   /* #00D2FF */
+#define COLOR_BLUE_ACCENT      7   /* #38BDF8 */
+#define COLOR_EMERALD_OK       8   /* normal / running: a neutral, not green (ISA-101); name kept for the API */
+#define COLOR_AMBER_WARN       9   /* #F59E0B */
+#define COLOR_CRIMSON_TRIP     10  /* #EF4444 */
+#define COLOR_VIBRANT_ORANGE   11  /* #FB923C */
+#define COLOR_PURPLE_SECURE    12  /* #A855F7 */
+#define COLOR_SURFACE_HOVER    13  /* #1E293B */
+#define COLOR_DIM_TEXT         14  /* tertiary text / disabled */
+#define COLOR_NEON_GREEN       COLOR_DIM_TEXT  /* legacy alias */
+#define COLOR_WHITE_PURE       15  /* #FFFFFF */
+
+/* --- Role-Based Access Control (IEC 62443) --- */
+typedef enum {
+    ROLE_VIEWER      = 0,  /* read-only monitoring */
+    ROLE_OPERATOR    = 1,  /* acknowledge alarms, start/stop equipment, reset E-stop */
+    ROLE_MAINTENANCE = 2,  /* setpoints, diagnostics */
+    ROLE_ENGINEER    = 3   /* configuration, watchdog fault injection */
+} hmi_role_t;
+
+#define HMI_ROLE_COUNT 4
+
+/* --- Screens (dock order, ISA-101: overview first, then detail, then alarms, then support) --- */
+typedef enum {
+    SCREEN_PROCESS_OVERVIEW = 0,   /* every device: cards, or tiles when there are many */
+    SCREEN_READINGS,               /* every reading of every device: grouped, filtered, searchable, paged */
+    SCREEN_ALARM_MATRIX,
+    SCREEN_FIELD_DIAGNOSTICS,
+    SCREEN_HOST_TELEMETRY,
+    SCREEN_SECURITY_SETTINGS,
+    SCREEN_COUNT
+} hmi_screen_id_t;
+
+/* --- Input action keys (input_queue) --- */
+typedef enum {
+    KEY_NONE = 0,
+    KEY_NAV_PREV,
+    KEY_NAV_NEXT,
+    KEY_ACTION_ACK,
+    KEY_ACTION_TOGGLE_CONTRAST,
+    KEY_ACTION_EMERGENCY_STOP,
+    KEY_ACTION_PUMP_TOGGLE,
+    KEY_ACTION_VALVE_TOGGLE,
+    KEY_ACTION_SIMULATE_FAULT,
+    KEY_ACTION_ROLE_CYCLE
+} hmi_key_t;
+
+/* --- Alarm priority (ISA-18.2) --- */
+typedef enum {
+    ALARM_SEV_NONE     = 0,
+    ALARM_SEV_INFO     = 1,
+    ALARM_SEV_WARNING  = 2,
+    ALARM_SEV_CRITICAL = 3,
+    ALARM_SEV_ESTOP    = 4
+} hmi_alarm_sev_t;
+
+/* --- Summary latch state shown to the operator --- */
+typedef enum {
+    ALARM_LATCH_NORMAL = 0,         /* nothing active, nothing unacknowledged */
+    ALARM_LATCH_UNACKNOWLEDGED = 1, /* at least one alarm needs acknowledgement */
+    ALARM_LATCH_ACKNOWLEDGED = 2    /* all acknowledged, at least one still active */
+} hmi_alarm_latch_t;
+
+#endif /* INDUSTRIAL_HMI_CONFIG_H */
